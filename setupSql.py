@@ -46,6 +46,10 @@ def insertFromDict(database,table_name,dictionary):
 		database.commit()
 	except sqlite3.OperationalError as exception:
 		print(exception)
+	except sqlite3.ProgrammingError as exception:
+		print(command,dic)
+	except sqlite3.IntegrityError:
+		pass
 
 def _createTableFiles(database,table_name = u'papers'):
 	columns = {}

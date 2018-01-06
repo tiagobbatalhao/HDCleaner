@@ -5,7 +5,7 @@ import shutil # File-manipulation functions
 import filecmp # File-manipulation functions
 import hashlib # Evaluate hash-functions
 
-import setup_sql as setupSql
+import setupSql as setupSql
 
 def _findFiles(folder, method = 'walk'):
     """
@@ -62,14 +62,15 @@ def hashFile(filename, method = 'md5', blockSize = 65536):
     fileObject.close()
     return hashFunction.hexdigest()
 
-def insertFilesToDatabase(database,list_files,table = 'master'):
+def insertFilesToDatabase(database,table,list_files):
     """
     Save a list of files to a sqlite database
     """
     for filename in list_files:
+        # filename = unicode(filename,'utf-8')
         setupSql.insertFromDict(database,table,{'fileName':filename})
 
-def getFileInformation(database, onlyNull = True):
+def getFileInformation(database, onlyNull = True, hashing = True):
     """
     Populate the database with file size and hash
     """
@@ -83,11 +84,23 @@ def getFileInformation(database, onlyNull = True):
             fl = execution.fetchone()
             if fl is None:
                 break
-            size = os.stat(fl[0]).st_size
-            md5 = hashFile(fl[0])
-            update = {'fileSize':size,'hashMD5':md5}
-            condition = {'fileName':fl[0]}
-            setupSql.updateFromDict(database,table,update,condition)
+            try:
+                size = os.stat(fl[0]).st_size
+                if hashing:
+                    md5 = hashFile(fl[0])
+                    update = {'fileSize':size,'hashMD5':md5}
+                else:
+                    update = {'fileSize':size}
+                condition = {'fileName':fl[0]}
+                setupSql.updateFromDict(database,table,update,condition)
+            except FileNotFoundError:
+                pass
+
+def openDatabase(filename = None):
+    """
+    Return the current database
+    """
+    return setupSql.openDatabase(filename)
 
 
 def setupDatabase(filename = None):
@@ -127,7 +140,8 @@ def _findIssues_Same(database, table='master'):
     issues = []
     try:
         for result in results:
-            query = u"""SELECT fileName,fileSize
+            query = u"""
+            		SELECT fileName,fileSize
                     FROM {}
                     WHERE hashMD5 = :hashMD5
                     ;""".format(table)
@@ -146,8 +160,87 @@ def findIssues_MasterSlave(database):
     		SELECT t2.fileName, t1.filename, t2.fileSize
     		FROM slave t2 INNER JOIN master t1
     		ON t1.hashMD5 = t2.hashMD5
+            AND t1.filename <> t2.fileName
             GROUP BY t2.filename
             ORDER BY t2.fileSize DESC
     		;"""
     results = database.execute(query).fetchall()
     return results
+
+def delete(filename):
+    """
+    Try to delete a file.
+    """
+    try:
+        os.remove(filename)
+        return True
+    except FileNotFoundError:
+        return False
+
+def main(master,slave):
+	if False:
+		database = setupDatabase()
+		fls = findFiles(master)
+		print('\nFound {} files on master'.format(len(fls)))
+		insertFilesToDatabase(database,'master',fls)
+		print('\nInserted to database')
+		fls = findFiles(slave)
+		print('\nFound {} files on slave'.format(len(fls)))
+		insertFilesToDatabase(database,'slave',fls)
+		print('\nInserted to database')
+	else:
+		database = openDatabase()
+	getFileInformation(database)
+	print('\nHashed files.')
+	issues = findIssues_MasterSlave(database)
+	print('\nFound {} issues'.format(len(issues)))
+	savedSpace = 0
+	try:
+		for issue in issues:
+			if delete(issue[0]):
+				savedSpace += issue[2]
+				print('Deleted: {}'.format(issue[0]))
+	except KeyboardInterrupt:
+		pass
+	return savedSpace
+
+
+def removeEmptyFolders(path):
+    if not os.path.isdir(path):
+        return
+    # remove empty subfolders
+    try:
+        files = os.listdir(path)
+        if len(files):
+            for f in files:
+                fullpath = os.path.join(path, f)
+                if os.path.isdir(fullpath):
+                    removeEmptyFolders(fullpath)
+        # if folder empty, delete it
+        files = os.listdir(path)
+        if len(files) == 0:
+            print('Removing empty folder: {}'.format(path))
+            os.rmdir(path)
+    except OSError:
+        pass
+
+
+
+
+
+
+
+
+def handleIssueForHD(issues):
+	savedSpace = 0
+	for issue in issues:
+		toKeep = [x for x in issue if '/Consolidados/' in x[0]]
+		toDelete = [x for x in issue if '/Consolidados/' not in x[0]]
+		toDelete.sort(key = lambda x: x[0])
+		if len(toKeep)==0:
+			toKeep.append(toDelete.pop(0))
+		for name,size in toDelete:
+			if delete(name):
+				savedSpace += size
+				print('Deleted: {}'.format(name))
+
